@@ -69,11 +69,21 @@ resource "helm_release" "argo_cd" {
       params:
         # Внутри кластера TLS терминирует ingress-контроллер
         server.insecure: true
+      cm:
+        # По умолчанию Argo CD опрашивает git раз в 3 минуты. Для стенда,
+        # где всё видно сразу, уменьшаем до 30 секунд.
+        timeout.reconciliation: 30s
+        timeout.reconciliation.jitter: 5s
     # Лишние компоненты на тестовом стенде не нужны
     dex:
       enabled: false
     notifications:
       enabled: false
+    # Чарт по умолчанию тянет redis из ecr-public.aws.com, который из этого
+    # региона недоступен. Берём тот же тег из Docker Hub.
+    redis:
+      image:
+        repository: docker.io/library/redis
     server:
       ingress:
         enabled: false   # Ingress создаём сами ниже, чтобы он был виден в плане
@@ -82,9 +92,11 @@ resource "helm_release" "argo_cd" {
 }
 
 resource "helm_release" "sops_secrets_operator" {
-  name             = "sops-secrets-operator"
-  namespace        = "sops"
-  create_namespace = true
+  name      = "sops-secrets-operator"
+  namespace = kubernetes_namespace_v1.sops.metadata[0].name
+
+  # namespace и age-ключ уже созданы ресурсами выше (см. secrets.tf)
+  create_namespace = false
 
   repository = "https://isindir.github.io/sops-secrets-operator/"
   chart      = "sops-secrets-operator"
@@ -105,6 +117,8 @@ resource "helm_release" "sops_secrets_operator" {
         value: /etc/sops-age-key-file/key
   YAML
   ]
+
+  depends_on = [kubernetes_secret_v1.sops_age_key_file]
 }
 
 # Ingress для UI Argo CD (обычный core-ресурс, не CRD — можно создавать из IaC)
