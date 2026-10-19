@@ -23,25 +23,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-python@v7
         with:
-          go-version-file: go.mod
-          cache: true
+          python-version-file: .python-version
+          cache: pip
 
-      - name: Проверка форматирования
+      - name: Установка зависимостей
+        run: pip install -r requirements-dev.txt
+
+      - name: ruff (линт + форматирование)
         run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "Эти файлы не отформатированы gofmt:"
-            echo "$unformatted"
-            exit 1
-          fi
+          ruff check .
+          ruff format --check .
 
-      - name: go vet
-        run: go vet ./...
-
-      - name: go test
-        run: go test -race -v ./...
+      - name: pytest
+        run: pytest -v
 
   # ------------------------------------------------- сборка образа + smoke
   build:

@@ -1,24 +1,29 @@
 # k8s-demo — пример CI/CD в GitHub Actions с деплоем в kind
 
-Маленькое Go-приложение (stdlib only) + пайплайн: **тесты → сборка образа → push в GHCR → деплой в кластер kind**.
+Маленькое приложение на **Python (Flask + gunicorn)** + пайплайн:
+**тесты → сборка образа → push в GHCR → деплой в кластер kind**.
 
 ```
 push в main ──► [test] ──► [build] ──► [deploy]
                  │          │            │
-             gofmt/vet/   docker push  self-hosted runner:
-             go test      в ghcr.io    kubectl apply -k + rollout
-                          + smoke-тест
+            ruff + pytest  docker push  self-hosted runner:
+                           в ghcr.io    kubectl apply -k + rollout
+                           + smoke-тест
 ```
 
 ## Структура
 
 ```
-main.go                     HTTP-сервис: /, /healthz, /readyz
-main_test.go                юнит-тесты (httptest)
-Dockerfile                  multi-stage: golang:1.27-alpine → alpine:3.24, non-root
+app.py                      Flask-приложение: /, /healthz, /readyz
+test_app.py                 тесты (pytest, Flask test client)
+requirements.txt            flask, gunicorn (рантайм)
+requirements-dev.txt        + pytest, ruff (для тестов и линтера)
+pyproject.toml              настройки ruff и pytest
+.python-version             3.11 (используется в CI)
+Dockerfile                  python:3.11-slim, non-root uid 10001, gunicorn
 Makefile                    локальные команды
 deploy/kustomization.yaml   подстановка образа (CI переписывает newName/newTag)
-deploy/deployment.yaml      2 реплики, пробы, лимиты, non-root, readonly rootfs
+deploy/deployment.yaml      2 реплики, пробы, лимиты, non-root, read-only rootfs
 deploy/service.yaml         NodePort 30080 (проброшен на localhost:8080)
 .github/workflows/ci-cd.yml пайплайн
 ```
@@ -27,16 +32,37 @@ deploy/service.yaml         NodePort 30080 (проброшен на localhost:80
 
 | Путь | Назначение |
 |---|---|
-| `/` | JSON: service, version (тег сборки), hostname, go_version |
+| `/` | JSON: service, version (тег сборки), hostname, python_version |
 | `/healthz` | liveness-проба, `ok` |
 | `/readyz` | readiness-проба, `ok` |
 
+Версия попадает в образ на этапе сборки: `docker build --build-arg VERSION=<тег>` →
+`ENV APP_VERSION` → `GET /` показывает, какая сборка реально запущена.
+
 ## Локальная разработка
 
+Системный Python в Astra Linux — 3.7, он не подойдёт. Один раз ставим 3.11:
+
 ```bash
-make test              # gofmt-проверка делается в CI
-make build TAG=local   # docker build
-make run               # запуск на http://localhost:18080
+sudo apt-get install -y python3.11 python3.11-venv
+```
+
+Дальше:
+
+```bash
+make venv            # создать .venv (использует python3.11, если он есть)
+make install         # установить зависимости
+make test            # ruff check + ruff format --check + pytest
+make fmt             # автоисправление форматирования
+
+APP_VERSION=local PORT=8080 .venv/bin/python app.py   # запуск на http://localhost:8080
+```
+
+Если не хочется ставить Python вообще — всё то же самое в контейнере:
+
+```bash
+make test-docker     # ruff + pytest внутри python:3.11-slim
+make build TAG=local && make run                     # образ + запуск на :18080
 ```
 
 ## Требования для деплоя
@@ -98,17 +124,19 @@ sudo loginctl enable-linger "$USER"   # чтобы работал после л�
 Отдельные секреты **не нужны**: для push в GHCR используется встроенный `GITHUB_TOKEN`
 (права `packages: write` выдаются в job `build`).
 
-## Важно про приватность образа
+## Нюансы, о которые легко споткнуться
 
-Образ попадает в GHCR. Если пакет приватный, нода kind не сможет его скачать и поды
-застрянут в `ImagePullBackOff`. Варианты:
+**Приватность образа.** Образ попадает в GHCR. Если пакет приватный, нода kind не сможет
+его скачать и поды застрянут в `ImagePullBackOff`. Варианты: сделать пакет публичным
+(Settings пакета → Change visibility → Public) или завести `imagePullSecret`.
 
-- сделать пакет публичным (Settings пакета → Change visibility → Public) — проще всего;
-- либо завести `imagePullSecret` и добавить его в `deployment.yaml`.
-
-Отдельный нюанс: путь образа в GHCR должен быть **в нижнем регистре**
+**Регистр в имени образа.** Путь в GHCR должен быть в нижнем регистре
 (`ghcr.io/ennui-data/k8s-demo`, а не `ghcr.io/Ennui-data/k8s-demo`) — Docker не принимает
-заглавные буквы в имени репозитория. В workflow это уже учтено (`tr '[:upper:]' '[:lower:]'`).
+заглавные буквы в имени репозитория. В workflow это учтено (`tr '[:upper:]' '[:lower:]'`).
+
+**Read-only файловая система и gunicorn.** В `deployment.yaml` включён
+`readOnlyRootFilesystem: true`, а gunicorn для служебных файлов воркеров пишет в `/tmp`.
+Поэтому в манифест добавлен `emptyDir` на `/tmp` — без него контейнер не поднимется.
 
 ## Ручной прогон и откат
 

@@ -1,28 +1,25 @@
-# --- Стадия сборки ---
-FROM golang:1.27-alpine AS build
-
-WORKDIR /src
-
-# Сначала только манифесты — слой с зависимостями кэшируется.
-COPY go.mod ./
-
-COPY main.go main_test.go ./
+# --- Рантайм ---
+FROM python:3.11-slim
 
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build \
-        -trimpath \
-        -ldflags "-s -w -X main.version=${VERSION}" \
-        -o /out/k8s-demo .
+ENV APP_VERSION=${VERSION} \
+    PORT=8080 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
-# --- Стадия рантайма ---
-FROM alpine:3.24
+WORKDIR /app
 
-RUN adduser -D -u 10001 app
+# Сначала зависимости — этот слой кэшируется, пока не менялся requirements.txt.
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY --from=build /out/k8s-demo /k8s-demo
+COPY app.py ./
 
+# Не работаем от root.
+RUN useradd --create-home --uid 10001 app
 USER 10001
+
 EXPOSE 8080
 
-# Пробы настраиваются в Kubernetes (deploy/deployment.yaml), HEALTHCHECK не нужен.
-ENTRYPOINT ["/k8s-demo"]
+# exec, чтобы gunicorn был PID 1 и корректно получал сигналы (SIGTERM при rollout).
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT} --workers 2 --access-logfile - --error-logfile - app:app"]

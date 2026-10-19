@@ -60,3 +60,11 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          # При readOnlyRootFilesystem корень только для чтения, поэтому даём
+          # writable-volume в /tmp (нужен gunicorn для служебных файлов воркеров).
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
