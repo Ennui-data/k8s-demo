@@ -1,0 +1,24 @@
+# Окружение dev: синхронизируется автоматически с каждым коммитом в main.
+# В CI тег образа обновляет job update-dev (workflow ci.yml).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: k8s-demo-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Ennui-data/k8s-demo.git
+    targetRevision: main
+    path: deploy/overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true

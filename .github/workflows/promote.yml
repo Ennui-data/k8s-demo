@@ -1,0 +1,94 @@
+name: Promote
+
+# Прод обновляется только так: workflow запускается вручную, а job promote
+# привязан к GitHub Environment "prod" с required reviewers — без approve
+# (или с rejection) правка прод-оверлея в git не попадёт.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Тег образа для прода (тот, что уже проверен в dev, например sha-abc1234)"
+        required: true
+        type: string
+      verify:
+        description: "Дождаться синхронизации Argo CD и проверить живой ответ"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: promote-prod
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Обновить прод-оверлей
+    runs-on: ubuntu-latest
+    environment: prod          # <-- гейт с ручным approve
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.set.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Проверяю, что тег похож на существующий (sha-xxxxxxx)
+        run: |
+          set -eu
+          tag="${{ inputs.tag }}"
+          case "$tag" in
+            sha-*) ;;
+            *) echo "Тег должен начинаться с sha-, получено: $tag" >&2; exit 1 ;;
+          esac
+
+      - name: Пишу тег в deploy/overlays/prod
+        id: set
+        run: |
+          set -eu
+          tag="${{ inputs.tag }}"
+
+          sed -i -E "s|^([[:space:]]*newTag:).*|\1 ${tag}|" deploy/overlays/prod/kustomization.yaml
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "cd: prod -> ${tag} (approved by ${{ github.actor }})"
+          git push
+
+  verify:
+    name: Проверка прода в кластере
+    needs: promote
+    if: ${{ inputs.verify }}
+    runs-on: [self-hosted, linux, x64, kind]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Жду, пока Argo CD применит и проверяю живой ответ
+        run: |
+          set -eu
+          export PATH="$HOME/.local/bin:$PATH"
+          tag="${{ needs.promote.outputs.tag }}"
+
+          echo "Ожидаю, что в demo-prod поднимется образ с тегом $tag"
+          for i in $(seq 1 60); do
+            image=$(kubectl -n demo-prod get deploy k8s-demo -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+            if [ "${image##*:}" = "$tag" ]; then
+              echo "Argo CD применил $image"
+              break
+            fi
+            sleep 10
+          done
+
+          kubectl -n demo-prod rollout status deployment/k8s-demo --timeout=180s
+
+          echo "--- состояние:"
+          kubectl -n demo-prod get deploy,pods -l app=k8s-demo -o wide
+          kubectl -n argocd get application k8s-demo-prod -o jsonpath='{.status.sync.status} / {.status.health.status}'; echo
+
+          echo "--- ответ приложения через ingress (Host: k8s-demo.prod.local):"
+          curl -fsS -H "Host: k8s-demo.prod.local" "http://localhost:${{ vars.K8S_HTTP_PORT || 8080 }}/" \
+            | tee /tmp/prod.json
+          echo
+          grep -q "\"version\":\"$tag\"" /tmp/prod.json
+          echo "OK: prod отдаёт $tag"

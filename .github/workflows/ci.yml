@@ -1,0 +1,198 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  # ---------------------------------------------------------------- тесты
+  test:
+    name: Тесты
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+          cache: pip
+
+      - name: Установка зависимостей
+        run: pip install -r requirements-dev.txt
+
+      - name: ruff (линт + форматирование)
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: pytest
+        run: pytest -v
+
+  # ------------------------------------------------- валидация манифестов
+  validate:
+    name: Валидация манифестов
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Ставлю kustomize, kubeconform, kube-linter
+        env:
+          KUSTOMIZE_VERSION: v5.8.3
+          KUBECONFORM_VERSION: v0.8.0
+          KUBE_LINTER_VERSION: v0.8.3
+        run: |
+          set -euo pipefail
+          cd /tmp
+
+          curl -fsSL -o kustomize.tgz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          tar xzf kustomize.tgz kustomize
+
+          curl -fsSL -o kc.tgz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          tar xzf kc.tgz kubeconform
+
+          curl -fsSL -o kl.tgz \
+            "https://github.com/stackrox/kube-linter/releases/download/${KUBE_LINTER_VERSION}/kube-linter-linux.tar.gz"
+          tar xzf kl.tgz kube-linter
+
+          sudo install -m 0755 kustomize kubeconform kube-linter /usr/local/bin/
+          kustomize version
+
+      - name: Рендер оверлеев и проверка схем (kubeconform)
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/rendered
+          for env in dev prod; do
+            echo "=== $env ==="
+            kustomize build "deploy/overlays/$env" > "/tmp/rendered/$env.yaml"
+            # -ignore-missing-schemas: у CRD (SopsSecret) нет публичной схемы
+            kubeconform -strict -ignore-missing-schemas -summary "/tmp/rendered/$env.yaml"
+          done
+
+      - name: Проверка практик (kube-linter)
+        run: kube-linter lint /tmp/rendered/dev.yaml /tmp/rendered/prod.yaml
+
+  # ------------------------------------------------- сборка образа + скан
+  build:
+    name: Сборка образа
+    needs: [test, validate]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Определяю имя образа и тег
+        id: meta
+        run: |
+          echo "tag=sha-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "image=$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Логин в GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Сборка и push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          # load нужен, чтобы следующие шаги работали с локальным образом
+          load: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.tag }}
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.tag }}
+
+      - name: Скан образа (trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: Smoke-тест контейнера
+        run: |
+          set -eu
+          image="${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}"
+          tag="${{ steps.meta.outputs.tag }}"
+
+          docker run -d --rm --name smoke -p 18080:8080 "$image"
+
+          ok=0
+          for i in $(seq 1 20); do
+            if curl -fsS http://localhost:18080/healthz >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          [ "$ok" = 1 ] || { echo "контейнер не поднялся"; docker logs smoke; exit 1; }
+
+          echo "readiness отвечает:"
+          curl -fsS http://localhost:18080/readyz
+
+          echo "проверяю JSON /: service=k8s-demo и version=$tag"
+          curl -fsS http://localhost:18080/ \
+            | jq -e --arg tag "$tag" '.service == "k8s-demo" and .version == $tag'
+
+          docker rm -f smoke
+
+  # ------------------------------- передача в GitOps: тег в dev-оверлей
+  update-dev:
+    name: Обновляю тег в dev
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Пишу новый тег в deploy/overlays/dev
+        run: |
+          set -eu
+          tag="${{ needs.build.outputs.tag }}"
+
+          sed -i -E "s|^([[:space:]]*newTag:).*|\1 ${tag}|" deploy/overlays/dev/kustomization.yaml
+
+          if git diff --quiet; then
+            echo "Тег уже $tag — нечего обновлять"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "cd: dev -> ${tag}"
+          git push
+
+          echo "Теперь Argo CD сам синхронизирует dev (push от GITHUB_TOKEN новые workflow не запускает)."

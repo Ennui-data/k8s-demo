@@ -1,0 +1,15 @@
+# Правила шифрования SOPS.
+#
+# Приватный ключ age лежит вне git: ~/.config/sops/age/keys.txt
+# Публичный ключ можно спокойно коммитить — он ничего не расшифровывает.
+#
+# Новый секрет создаётся так:
+#   1. написать манифест в deploy/overlays/<env>/sops-secret.enc.yaml (в открытом виде)
+#   2. sops --encrypt --in-place deploy/overlays/<env>/sops-secret.enc.yaml
+#   3. коммитить только зашифрованный файл
+creation_rules:
+  - path_regex: deploy/overlays/.*/sops-secret\.enc\.yaml$
+    # Шифруем поддерево secretTemplates: имена и метаданные остаются читаемыми,
+    # а значения секретов — нет. Этого требует формат SopsSecret.
+    encrypted_suffix: Templates
+    age: age1da3ymj5wtkvukggn39ghwel0vchnljtlj56pfvahcxc047pnqalsmelpkp

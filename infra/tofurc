@@ -1,0 +1,17 @@
+# Конфигурация CLI для OpenTofu/Terraform.
+#
+# Реестры registry.terraform.io и registry.opentofu.org недоступны из этого
+# региона (CloudFront WAF отвечает 403 с x-amzn-waf-reason: geo), поэтому
+# провайдеры берутся из публичного network-зеркала Yandex Cloud.
+#
+# Использование:  export TF_CLI_CONFIG_FILE=$PWD/infra/tofurc
+provider_installation {
+  network_mirror {
+    url     = "https://terraform-mirror.yandexcloud.net/"
+    include = ["registry.terraform.io/*/*"]
+  }
+
+  direct {
+    exclude = ["registry.terraform.io/*/*"]
+  }
+}

@@ -1,0 +1,26 @@
+# Квоты окружения: часть «инфраструктуры окружения», живёт рядом с приложением.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: demo-dev-quota
+spec:
+  hard:
+    requests.cpu: "2"
+    requests.memory: 2Gi
+    limits.cpu: "4"
+    limits.memory: 4Gi
+    pods: "10"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: demo-dev-limits
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: 200m
+        memory: 128Mi
+      defaultRequest:
+        cpu: 25m
+        memory: 32Mi

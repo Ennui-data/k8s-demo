@@ -3,3 +3,14 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+
+# Секреты: в git попадают только зашифрованные файлы (*.enc.yaml)
+deploy/overlays/*/sops-secret.yaml
+*.dec.yaml
+
+# OpenTofu/Terraform
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/tfplan
+infra/.terraform.tfstate.lock.info

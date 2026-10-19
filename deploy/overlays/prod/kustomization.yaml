@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Окружение prod: 3 реплики, свой namespace и хост.
+# newTag сюда пишет только workflow promote.yml — он требует approve (environment: prod).
+namespace: demo-prod
+
+resources:
+  - namespace.yaml
+  - quota.yaml
+  - ../../base
+  - ingress.yaml
+  - sops-secret.enc.yaml
+
+images:
+  - name: k8s-demo
+    newName: ghcr.io/ennui-data/k8s-demo
+    newTag: sha-5c6b67d
+
+replicas:
+  - name: k8s-demo
+    count: 3

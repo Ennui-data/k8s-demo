@@ -3,20 +3,39 @@ PY    ?= $(shell command -v python3.11 >/dev/null 2>&1 && echo python3.11 || ech
 VENV  ?= .venv
 IMAGE ?= ghcr.io/owner/k8s-demo
 TAG   ?= dev
+ENV   ?= dev
+YAML  ?= /tmp/$(ENV).yaml
 
-.PHONY: help venv install lint fmt test test-docker build run deploy status
+TOFU  ?= $(HOME)/.local/bin/tofu
+TF_STATE ?= $(HOME)/.local/share/tofu/k8s-demo.tfstate
+export TF_CLI_CONFIG_FILE = $(CURDIR)/infra/tofurc
+
+.PHONY: help venv install lint fmt test test-docker build run \
+        render lint-manifests iac-init iac-plan iac-apply iac-fmt iac-output \
+        argocd-password apps secrets-edit docker-check
 
 help:
-	@echo "make venv        - создать виртуальное окружение ($(PY))"
-	@echo "make install     - установить зависимости (включая dev)"
-	@echo "make lint        - ruff check"
-	@echo "make fmt         - ruff format (исправить форматирование)"
-	@echo "make test        - ruff + pytest локально"
-	@echo "make test-docker - то же самое, но в контейнере (не нужен локальный Python)"
-	@echo "make build       - собрать образ $(IMAGE):$(TAG)"
-	@echo "make run         - запустить локально на :18080 (нужен build)"
-	@echo "make deploy      - kubectl apply -k deploy/"
-	@echo "make status      - состояние деплоя в кластере"
+	@echo "Разработка:"
+	@echo "  make venv install   - окружение и зависимости (python3.11)"
+	@echo "  make test           - ruff + pytest локально"
+	@echo "  make test-docker    - то же в контейнере"
+	@echo "  make build TAG=x    - собрать образ"
+	@echo "  make run            - запустить локально на :18080"
+	@echo
+	@echo "Манифесты (ENV=dev|prod):"
+	@echo "  make render         - kustomize build overlays/\$$ENV"
+	@echo "  make lint-manifests - render + kubeconform + kube-linter"
+	@echo
+	@echo "Инфраструктура (OpenTofu):"
+	@echo "  make iac-init       - tofu init (state в $(TF_STATE))"
+	@echo "  make iac-plan       - tofu plan"
+	@echo "  make iac-apply      - tofu apply (кластер + addons)"
+	@echo "  make iac-output     - tofu output"
+	@echo
+	@echo "GitOps/секреты:"
+	@echo "  make apps           - Applications в Argo CD"
+	@echo "  make argocd-password- пароль admin в UI Argo CD"
+	@echo "  make secrets-edit   - правка секрета (ENV=dev|prod) через sops"
 
 venv:
 	$(PY) -m venv $(VENV)
@@ -48,8 +67,38 @@ build:
 run:
 	docker run --rm -p 18080:8080 $(IMAGE):$(TAG)
 
-deploy:
-	kubectl apply -k deploy/
+render:
+	kustomize build deploy/overlays/$(ENV) > $(YAML)
+	@echo "готово: $(YAML)"
 
-status:
-	kubectl get deploy,pods,svc -l app=k8s-demo -o wide
+lint-manifests: render
+	kubeconform -strict -ignore-missing-schemas -summary $(YAML)
+	kube-linter lint $(YAML)
+
+iac-init:
+	mkdir -p "$$(dirname $(TF_STATE))"
+	cd infra && $(TOFU) init -backend-config=path=$(TF_STATE)
+
+iac-plan: iac-init
+	cd infra && $(TOFU) plan
+
+iac-apply: iac-init
+	cd infra && $(TOFU) apply
+
+iac-fmt:
+	cd infra && $(TOFU) fmt -recursive
+
+iac-output:
+	cd infra && $(TOFU) output
+
+apps:
+	kubectl -n argocd get applications
+
+argocd-password:
+	@kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+
+secrets-edit:
+	sops deploy/overlays/$(ENV)/sops-secret.enc.yaml
+
+docker-check:
+	@sg docker -c 'docker info >/dev/null && echo "docker доступен"'

@@ -14,6 +14,11 @@ APP_VERSION = os.getenv("APP_VERSION", "dev")
 PORT = int(os.getenv("PORT", "8080"))
 
 
+def _token() -> str:
+    """Токен приходит из Secret, который создаёт sops-secrets-operator."""
+    return os.getenv("DEMO_TOKEN", "")
+
+
 def create_app() -> Flask:
     """Фабрика приложения: удобно и для тестов, и для gunicorn."""
     app = Flask(__name__)
@@ -22,12 +27,16 @@ def create_app() -> Flask:
     @app.get("/")
     def index():
         """JSON с версией сборки — по нему видно, что именно задеплоилось."""
+        token = _token()
         return jsonify(
             service="k8s-demo",
             version=APP_VERSION,
             hostname=socket.gethostname(),
             path=request.path,
             python_version=platform.python_version(),
+            # Сам токен наружу не отдаём — только факт наличия и длину
+            token_configured=bool(token),
+            token_length=len(token),
         )
 
     @app.get("/healthz")

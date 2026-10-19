@@ -31,3 +31,21 @@ def test_index_reports_build_info(client):
     assert body["hostname"]
     assert body["version"]
     assert body["python_version"]
+
+
+def test_index_reports_configured_token(client, monkeypatch):
+    monkeypatch.setenv("DEMO_TOKEN", "super-secret-token")
+
+    body = client.get("/").get_json()
+
+    assert body["token_configured"] is True
+    assert body["token_length"] == len("super-secret-token")
+
+
+def test_index_without_token(client, monkeypatch):
+    monkeypatch.delenv("DEMO_TOKEN", raising=False)
+
+    body = client.get("/").get_json()
+
+    assert body["token_configured"] is False
+    assert body["token_length"] == 0

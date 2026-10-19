@@ -1,0 +1,25 @@
+# Окружение prod: Argo CD тоже синхронизирует автоматически, но попасть в этот
+# оверлей можно только через workflow promote.yml, а он требует approve
+# (GitHub Environment "prod" с required reviewers). То есть гейт — на записи в git.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: k8s-demo-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Ennui-data/k8s-demo.git
+    targetRevision: main
+    path: deploy/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true

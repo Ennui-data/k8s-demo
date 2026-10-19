@@ -1,0 +1,90 @@
+name: IaC
+
+# Инфраструктура управляется кодом из infra/: кластер kind, addons, ingress Argo CD.
+# plan — на PR, apply — на main и только после approve (environment: prod).
+on:
+  pull_request:
+    paths: ["infra/**", ".github/workflows/iac.yml"]
+  push:
+    branches: [main]
+    paths: ["infra/**", ".github/workflows/iac.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: iac-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: tofu plan
+    # ВАЖНО: self-hosted раннер не должен запускать код из форков
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, x64, kind]
+    env:
+      TF_CLI_CONFIG_FILE: ${{ github.workspace }}/infra/tofurc
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Проверяю инструмент
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          tofu version
+          mkdir -p "$HOME/.local/share/tofu"
+          # делаем tofu видимым для следующих шагов (в т.ч. для команд через sg)
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Форматирование (tofu fmt -check)
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          tofu fmt -check -recursive
+
+      # Дальше команды идут через `sg docker`: сервис раннера запущен в сессии,
+      # которая стартовала до добавления пользователя в группу docker.
+      # После перелогина обёртка не нужна, но и не мешает.
+      - name: tofu init
+        run: sg docker -c "tofu init -input=false -no-color -backend-config=path=$HOME/.local/share/tofu/k8s-demo.tfstate"
+
+      - name: tofu validate
+        run: sg docker -c "tofu validate -no-color"
+
+      - name: tofu plan
+        run: sg docker -c "tofu plan -input=false -no-color -out=tfplan"
+
+      - name: Что планируется (кратко)
+        run: sg docker -c "tofu show -no-color tfplan | grep -E '^Plan:|^No changes' || true"
+
+  apply:
+    name: tofu apply
+    needs: plan
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, linux, x64, kind]
+    environment: prod          # <-- ручной approve перед изменением инфраструктуры
+    timeout-minutes: 30
+    env:
+      TF_CLI_CONFIG_FILE: ${{ github.workspace }}/infra/tofurc
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Готовлю окружение
+        run: |
+          mkdir -p "$HOME/.local/share/tofu"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: tofu init
+        run: sg docker -c "tofu init -input=false -no-color -backend-config=path=$HOME/.local/share/tofu/k8s-demo.tfstate"
+
+      - name: tofu apply
+        run: sg docker -c "tofu apply -input=false -auto-approve -no-color"
+
+      - name: Выходы
+        run: sg docker -c "tofu output -no-color"
