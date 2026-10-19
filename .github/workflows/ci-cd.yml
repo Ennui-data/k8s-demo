@@ -138,6 +138,10 @@ jobs:
             -e "s|newTag:.*|newTag: ${{ needs.build.outputs.tag }}|" \
             deploy/kustomization.yaml
 
+          kubectl annotate deployment/k8s-demo \
+            kubernetes.io/change-cause="CI: ${{ github.sha }} (${{ needs.build.outputs.tag }})" \
+            --overwrite 2>/dev/null || true
+
           kubectl apply -k deploy/
           kubectl rollout status deployment/k8s-demo --timeout=180s
 
