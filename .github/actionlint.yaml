@@ -1,0 +1,4 @@
+# Кастомные метки self-hosted runner'а (иначе actionlint ругается на runs-on)
+self-hosted-runner:
+  labels:
+    - kind
