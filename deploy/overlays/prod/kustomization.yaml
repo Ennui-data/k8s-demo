@@ -15,7 +15,7 @@ resources:
 images:
   - name: k8s-demo
     newName: ghcr.io/ennui-data/k8s-demo
-    newTag: sha-5c6b67d
+    newTag: sha-2940008
 
 replicas:
   - name: k8s-demo
