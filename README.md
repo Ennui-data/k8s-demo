@@ -49,9 +49,9 @@ infra/                                   инфраструктура как к�
   providers.tf, variables.tf, outputs.tf
   versions.tf, tofurc                    версии провайдеров; зеркало реестра (см. «Нюансы»)
 
-argocd/
-  root.yaml                              bootstrap-Application (app-of-apps), создаётся один раз руками
-  apps/dev.yaml, apps/prod.yaml          Applications для окружений: что и куда синхронизировать
+argocd/apps/
+  root.yaml                              bootstrap (app-of-apps); применяется один раз руками
+  dev.yaml, prod.yaml                    Applications окружений: что и куда синхронизировать
 .sops.yaml                               правила шифрования (публичный age-ключ)
 
 .github/workflows/
@@ -144,7 +144,7 @@ State лежит вне репозитория: `~/.local/share/tofu/k8s-demo.tf
 **Bootstrap делается один раз** — единственный объект, который создаётся руками:
 
 ```bash
-kubectl apply -f argocd/root.yaml
+kubectl apply -f argocd/apps/root.yaml
 ```
 
 Дальше Argo CD сам читает папку `argocd/apps` и создаёт Applications `k8s-demo-dev` и
@@ -295,6 +295,12 @@ sudo loginctl enable-linger "$USER"   # чтобы работал после л�
 чарту (`create_namespace = true`) и `wait = true`, получится блокировка: Pod ждёт Secret
 с age-ключом, а Secret создаётся Terraform уже после релиза. Поэтому в `secrets.tf`
 namespace и Secret создаются явно, до релиза.
+
+**App-of-apps: root лежит внутри своей же папки.** Это не случайность. Если вынести
+`root.yaml` из `argocd/apps`, живой объект `k8s-demo-root` станет для приложения
+«сиротой»: при `prune: true` Argo CD удалит его, а `resources-finalizer` унесёт за ним
+дочерние Applications вместе с содержимым `demo-dev` и `demo-prod`. Ловушка коварна тем,
+что проявляется не сразу, а на следующей синхронизации.
 
 **Если `tofu apply` упал на helm-релизе.** Helm-релиз может остаться в кластере
 (`failed`), при этом в state он не запишется. Следующий apply тогда ругается

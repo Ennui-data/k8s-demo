@@ -1,0 +1,30 @@
+# Bootstrap: создаётся один раз руками (kubectl apply -f argocd/apps/root.yaml).
+# Дальше Argo CD следит за этой папкой и создаёт остальные Applications.
+#
+# root.yaml лежит ВНУТРИ той папки, которой управляет, и это осознанно: корневое
+# приложение управляет и собой тоже (классический app-of-apps). Если вынести файл
+# из этой папки, живой объект k8s-demo-root станет для приложения «сиротой»:
+# с включённым prune оно удалит само себя, а финализеры унесут за ним дочерние
+# Applications вместе с содержимым окружений.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: k8s-demo-root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Ennui-data/k8s-demo.git
+    targetRevision: main
+    path: argocd/apps
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
