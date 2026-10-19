@@ -5,7 +5,7 @@ metadata:
   labels:
     app: k8s-demo
 spec:
-  replicas: 2
+  replicas: 3
   revisionHistoryLimit: 3
   selector:
     matchLabels:
