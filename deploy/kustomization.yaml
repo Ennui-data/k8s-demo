@@ -5,8 +5,9 @@ resources:
   - deployment.yaml
   - service.yaml
 
-# CI подменяет newName/newTag на актуальные (ghcr.io/<owner>/k8s-demo:sha-xxxxxxx)
+# CI подменяет newName/newTag на актуальные (ghcr.io/<owner>/k8s-demo:sha-xxxxxxx).
+# ВАЖНО: owner указывается в нижнем регистре — GHCR не принимает заглавные буквы.
 images:
   - name: k8s-demo
-    newName: ghcr.io/OWNER/k8s-demo
+    newName: ghcr.io/owner/k8s-demo
     newTag: latest

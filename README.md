@@ -106,6 +106,10 @@ sudo loginctl enable-linger "$USER"   # чтобы работал после л�
 - сделать пакет публичным (Settings пакета → Change visibility → Public) — проще всего;
 - либо завести `imagePullSecret` и добавить его в `deployment.yaml`.
 
+Отдельный нюанс: путь образа в GHCR должен быть **в нижнем регистре**
+(`ghcr.io/ennui-data/k8s-demo`, а не `ghcr.io/Ennui-data/k8s-demo`) — Docker не принимает
+заглавные буквы в имени репозитория. В workflow это уже учтено (`tr '[:upper:]' '[:lower:]'`).
+
 ## Ручной прогон и откат
 
 ```bash
@@ -117,5 +121,5 @@ kubectl rollout undo deployment/k8s-demo
 kubectl rollout history deployment/k8s-demo
 
 # принудительный деплой конкретного тега
-kubectl set image deployment/k8s-demo app=ghcr.io/OWNER/k8s-demo:sha-abc1234
+kubectl set image deployment/k8s-demo app=ghcr.io/owner/k8s-demo:sha-abc1234
 ```

@@ -1,4 +1,4 @@
-IMAGE ?= ghcr.io/OWNER/k8s-demo
+IMAGE ?= ghcr.io/owner/k8s-demo
 TAG   ?= dev
 
 .PHONY: help test fmt build run deploy status
