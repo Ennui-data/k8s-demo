@@ -92,17 +92,24 @@ jobs:
         run: |
           set -eu
           image="${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}"
+          tag="${{ steps.meta.outputs.tag }}"
+
           docker run -d --rm --name smoke -p 18080:8080 "$image"
 
           ok=0
           for i in $(seq 1 20); do
-            if curl -fsS http://localhost:18080/healthz; then ok=1; break; fi
+            if curl -fsS http://localhost:18080/healthz >/dev/null 2>&1; then ok=1; break; fi
             sleep 1
           done
           [ "$ok" = 1 ] || { echo "контейнер не поднялся"; docker logs smoke; exit 1; }
 
-          curl -fsS http://localhost:18080/ | grep -q '"service": "k8s-demo"'
+          echo "readiness отвечает:"
           curl -fsS http://localhost:18080/readyz
+
+          echo "проверяю JSON /: service=k8s-demo и version=$tag"
+          curl -fsS http://localhost:18080/ \
+            | jq -e --arg tag "$tag" '.service == "k8s-demo" and .version == $tag'
+
           docker rm -f smoke
 
   # --------------------------------------------- деплой в kind (self-hosted)
