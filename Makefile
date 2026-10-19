@@ -6,13 +6,14 @@ TAG   ?= dev
 ENV   ?= dev
 YAML  ?= /tmp/$(ENV).yaml
 
+CLUSTER ?= k8s-demo
 TOFU  ?= $(HOME)/.local/bin/tofu
 TF_STATE ?= $(HOME)/.local/share/tofu/k8s-demo.tfstate
 export TF_CLI_CONFIG_FILE = $(CURDIR)/infra/tofurc
 
 .PHONY: help venv install lint fmt test test-docker build run \
         render lint-manifests iac-init iac-plan iac-apply iac-fmt iac-output \
-        argocd-password apps secrets-edit docker-check
+        argocd-password apps secrets-edit docker-check cluster-stop cluster-start
 
 help:
 	@echo "Разработка:"
@@ -36,6 +37,10 @@ help:
 	@echo "  make apps           - Applications в Argo CD"
 	@echo "  make argocd-password- пароль admin в UI Argo CD"
 	@echo "  make secrets-edit   - правка секрета (ENV=dev|prod) через sops"
+	@echo
+	@echo "Стенд:"
+	@echo "  make cluster-stop   - выключить кластер (состояние сохраняется)"
+	@echo "  make cluster-start  - включить кластер и дождаться ноды"
 
 venv:
 	$(PY) -m venv $(VENV)
@@ -102,3 +107,15 @@ secrets-edit:
 
 docker-check:
 	@sg docker -c 'docker info >/dev/null && echo "docker доступен"'
+
+# Стенд целиком — это один контейнер kind. Остановка сохраняет состояние на диске
+# и освобождает память; запуск возвращает кластер, дальше Argo CD догоняет git сам.
+# Важно: пока кластер остановлен, tofu plan/apply падают (провайдер не может
+# прочитать kubeconfig из остановленного контейнера) — IaC работает на живом кластере.
+cluster-stop:
+	sg docker -c 'docker stop --time 60 $(CLUSTER)'
+
+cluster-start:
+	sg docker -c 'docker start $(CLUSTER)'
+	@echo "ждём ноду..."
+	@kubectl wait --for=condition=Ready node/$(CLUSTER)-control-plane --timeout=180s

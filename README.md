@@ -116,6 +116,40 @@ make lint-manifests ENV=dev      # kustomize build + kubeconform + kube-linter
 make render ENV=prod             # посмотреть, что получится
 ```
 
+## Команды без make
+
+В Astra Linux `make` по умолчанию не установлен — либо поставь его
+(`sudo apt-get install -y make`), либо пользуйся командами напрямую. Все таргеты
+Makefile — короткие обёртки, вот их содержимое:
+
+```bash
+# приложение
+python3.11 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/ruff check . && .venv/bin/ruff format --check . && .venv/bin/pytest -q
+
+# манифесты
+kubectl kustomize deploy/overlays/dev > /tmp/dev.yaml
+kubeconform -strict -ignore-missing-schemas -summary /tmp/dev.yaml
+kube-linter lint /tmp/dev.yaml
+
+# инфраструктура (всегда на живом кластере, docker — через sg, если сессия без группы)
+export TF_CLI_CONFIG_FILE=$PWD/infra/tofurc
+cd infra && tofu init -backend-config=path=$HOME/.local/share/tofu/k8s-demo.tfstate
+cd infra && sg docker -c "tofu plan"      # и tofu apply
+
+# секреты
+sops deploy/overlays/dev/sops-secret.enc.yaml        # правка
+sops --decrypt deploy/overlays/dev/sops-secret.enc.yaml   # посмотреть
+
+# Argo CD
+kubectl -n argocd get applications
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+
+# стенд
+sg docker -c 'docker stop --time 60 k8s-demo-control-plane'    # выключить
+sg docker -c 'docker start k8s-demo-control-plane'             # включить
+```
+
 ## Инфраструктура как код (OpenTofu)
 
 Кластер и платформенные аддоны создаются кодом из `infra/`:
@@ -217,6 +251,30 @@ sops --decrypt deploy/overlays/dev/sops-secret.enc.yaml
 git revert <коммит с cd: prod -> sha-...>   # Argo CD вернёт предыдущий тег
 git push
 ```
+
+## Как выключить и включить стенд
+
+Кластер kind — это один контейнер, поэтому выключение не трогает ни git, ни state:
+
+```bash
+make cluster-stop          # остановить кластер, память освободится
+make cluster-start         # включить и дождаться, пока нода станет Ready
+```
+
+После запуска Argo CD сам приведёт окружения к состоянию из git (опрос раз в 30 c) —
+вручную ничего делать не нужно. Пара оговорок:
+
+* пока кластер остановлен, `tofu plan/apply` **падают**: провайдер читает kubeconfig
+  из живого контейнера (`docker exec ... cat /etc/kubernetes/admin.conf`). IaC — только
+  на работающем кластере;
+* остановка ноды завершается сигналом (kind-нода не укладывается в graceful timeout,
+  `docker stop` возвращает код 137). etcd поднимается реплеем WAL — это штатное
+  поведение kind, но если стенд не нужен надолго, честнее снести его совсем:
+  запустить → `cd infra && tofu apply` (или `tofu destroy`) → при необходимости
+  заново `kubectl apply -f argocd/apps/root.yaml`;
+* если кластер выключен, jobs, которым нужен кластер (`tofu apply`, проверка после
+  promote), будут падать. Чтобы не ловить это, можно остановить и раннер:
+  `systemctl --user stop github-runner`.
 
 ## Требования и разовая настройка
 
